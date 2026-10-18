@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         AINS NILAM Auto Filler (Desktop Notification & Audio Alert)
+// @name         AINS NILAM Auto Filler (Draggable/Resizable UI + Stats)
 // @namespace    http://tampermonkey.net/
-// @version      2.4.0
-// @description  Fills wizard up to Step 4, checks confirmation, persists 3-min timer, auto-advances book queue, and triggers desktop notifications + audio chime.
+// @version      2.5.0
+// @description  Fills wizard up to Step 4, checks confirmation, persists 3-min timer, auto-advances book queue, draggable/resizable UI, and tracks books filled & Carta rank.
 // @match        https://ains.moe.gov.my/*
 // @include      *nilam*
 // @grant        none
@@ -45,7 +45,7 @@
             const notif = new Notification('AINS NILAM Timer Complete! 📚', {
                 body: '3 minutes are up! You can now submit your next book record.',
                 icon: 'https://ains.moe.gov.my/favicon.ico',
-                requireInteraction: true // Keeps popup on screen until dismissed/clicked
+                requireInteraction: true
             });
 
             notif.onclick = function() {
@@ -59,7 +59,7 @@
     function playAudioAlert() {
         try {
             const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
+            const notes = [523.25, 659.25, 783.99, 1046.50];
             notes.forEach((freq, idx) => {
                 const osc = audioCtx.createOscillator();
                 const gain = audioCtx.createGain();
@@ -75,7 +75,7 @@
         } catch(e) {}
     }
 
-    // Advances book dropdown queue to the next item
+    // Advance book dropdown queue to the next item
     function advanceToNextBook() {
         if (!loadedBooks || !loadedBooks.length) return;
         const currentIdx = parseInt(bookSelect.value || '0', 10);
@@ -85,15 +85,54 @@
         localStorage.setItem('ains_books_index', nextIdx.toString());
     }
 
-    // Persistent Timer logic: Survives page reloads via localStorage target timestamp
+    // Increment Total Books Filled Counter
+    function incrementBooksFilledCount() {
+        let count = parseInt(localStorage.getItem('ains_books_filled_count') || '0', 10);
+        count++;
+        localStorage.setItem('ains_books_filled_count', count.toString());
+        updateStatsDisplay();
+    }
+
+    // Scrape Carta Pendahuluan rank from page if present
+    function getCartaRank() {
+        let rankText = localStorage.getItem('ains_carta_rank') || 'N/A';
+        const elements = document.querySelectorAll('div, tr, td, span, p');
+
+        for (let el of elements) {
+            const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
+            if (txt.includes('kedudukan') || txt.includes('carta pendahuluan') || txt.includes('ranking')) {
+                const match = (el.innerText || el.textContent).match(/(?:#|kedudukan|rank)\s*(\d+)/i) || (el.parentElement?.innerText || '').match(/(\d+)/);
+                if (match && match[1]) {
+                    rankText = '#' + match[1];
+                    localStorage.setItem('ains_carta_rank', rankText);
+                    break;
+                }
+            }
+        }
+        return rankText;
+    }
+
+    // Update GUI Stats
+    function updateStatsDisplay() {
+        const filledDiv = document.getElementById('ains-stats-filled');
+        const rankDiv = document.getElementById('ains-stats-rank');
+
+        const filledCount = localStorage.getItem('ains_books_filled_count') || '0';
+        const rank = getCartaRank();
+
+        if (filledDiv) filledDiv.innerText = `📖 Books Filled: ${filledCount}`;
+        if (rankDiv) rankDiv.innerText = `🏆 Carta Rank: ${rank}`;
+    }
+
+    // Persistent Timer logic
     function startCooldownTimer(durationSeconds = 180) {
         let endTime = localStorage.getItem('ains_cooldown_end_time');
 
-        // Set a new target end timestamp if none exists
         if (!endTime || parseInt(endTime, 10) <= Date.now()) {
             endTime = Date.now() + (durationSeconds * 1000);
             localStorage.setItem('ains_cooldown_end_time', endTime.toString());
-            advanceToNextBook(); // Auto-advance queue when timer starts
+            advanceToNextBook();
+            incrementBooksFilledCount();
         } else {
             endTime = parseInt(endTime, 10);
         }
@@ -128,7 +167,6 @@
         }, 1000);
     }
 
-    // Check on page load if a timer was already running
     function checkAndResumeTimer() {
         const endTime = localStorage.getItem('ains_cooldown_end_time');
         if (endTime && parseInt(endTime, 10) > Date.now()) {
@@ -346,7 +384,7 @@
                     safeTimeout(() => {
                         executeFillStep(book);
                         safeTimeout(() => {
-                            clickNextButton(); // Reaches Step 4 (Semakan)
+                            clickNextButton();
                             safeTimeout(() => {
                                 checkConfirmationBox();
                             }, 400);
@@ -368,14 +406,43 @@
         }
     }, true);
 
-    // UI Panel Setup
+    // Build Draggable & Resizable UI
     const container = document.createElement('div');
     container.id = 'ains-autofill-ui';
-    container.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:2147483647;background:#ffffff;padding:12px;border-radius:8px;box-shadow:0 4px 15px rgba(0,0,0,0.2);font-family:sans-serif;display:flex;flex-direction:column;gap:8px;width:260px;border:1px solid #ddd;';
+
+    // Load saved position and sizing
+    const savedTop = localStorage.getItem('ains_ui_top') || 'auto';
+    const savedLeft = localStorage.getItem('ains_ui_left') || 'auto';
+    const savedBottom = savedTop === 'auto' ? (localStorage.getItem('ains_ui_bottom') || '20px') : 'auto';
+    const savedRight = savedLeft === 'auto' ? (localStorage.getItem('ains_ui_right') || '20px') : 'auto';
+    const savedWidth = localStorage.getItem('ains_ui_width') || '270px';
+    const savedHeight = localStorage.getItem('ains_ui_height') || 'auto';
+
+    container.style.cssText = `position:fixed;top:${savedTop};left:${savedLeft};bottom:${savedBottom};right:${savedRight};width:${savedWidth};height:${savedHeight};min-width:220px;min-height:220px;z-index:2147483647;background:#ffffff;padding:12px;border-radius:8px;box-shadow:0 4px 15px rgba(0,0,0,0.2);font-family:sans-serif;display:flex;flex-direction:column;gap:8px;border:1px solid #ddd;resize:both;overflow:auto;`;
+
+    // Header handle for dragging
+    const header = document.createElement('div');
+    header.innerText = '✨ AINS NILAM Auto Filler';
+    header.style.cssText = 'font-size: 13px; font-weight: bold; color: #1e40af; cursor: move; border-bottom: 1px solid #eee; padding-bottom: 4px; user-select: none;';
+
+    // Stats Section Display
+    const statsContainer = document.createElement('div');
+    statsContainer.style.cssText = 'background: #f8fafc; padding: 6px; border-radius: 4px; border: 1px solid #e2e8f0; font-size: 11px; color: #334155; display: flex; flex-direction: column; gap: 2px;';
+
+    const filledDiv = document.createElement('div');
+    filledDiv.id = 'ains-stats-filled';
+    filledDiv.innerText = '📖 Books Filled: 0';
+
+    const rankDiv = document.createElement('div');
+    rankDiv.id = 'ains-stats-rank';
+    rankDiv.innerText = '🏆 Carta Rank: N/A';
+
+    statsContainer.appendChild(filledDiv);
+    statsContainer.appendChild(rankDiv);
 
     const label = document.createElement('label');
     label.innerText = '1. Upload books.json:';
-    label.style.cssText = 'font-size: 12px; font-weight: bold; color: #333;';
+    label.style.cssText = 'font-size: 11px; font-weight: bold; color: #333; margin-top: 4px;';
 
     const fileInput = document.createElement('input');
     fileInput.type = 'file';
@@ -384,10 +451,10 @@
 
     const selectLabel = document.createElement('label');
     selectLabel.innerText = '2. Current Book Queue:';
-    selectLabel.style.cssText = 'font-size: 12px; font-weight: bold; color: #333; display: none;';
+    selectLabel.style.cssText = 'font-size: 11px; font-weight: bold; color: #333; display: none;';
 
     const bookSelect = document.createElement('select');
-    bookSelect.style.cssText = 'padding: 4px; font-size: 12px; display: none;';
+    bookSelect.style.cssText = 'padding: 4px; font-size: 11px; display: none;';
 
     const fillBtn = document.createElement('button');
     fillBtn.innerText = '⚡ Fill & Auto-Advance Wizard';
@@ -451,7 +518,7 @@
     });
 
     fillBtn.addEventListener('click', () => {
-        requestNotificationPermission(); // Ask for notification permission on first use
+        requestNotificationPermission();
         const selectedIndex = parseInt(bookSelect.value, 10);
         const book = loadedBooks[selectedIndex];
         runAutoSequence(book);
@@ -461,6 +528,47 @@
         advanceToNextBook();
     });
 
+    // Make GUI Draggable
+    let isDragging = false;
+    let offsetX = 0, offsetY = 0;
+
+    header.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        offsetX = e.clientX - container.offsetLeft;
+        offsetY = e.clientY - container.offsetTop;
+        document.body.style.userSelect = 'none';
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        const newLeft = e.clientX - offsetX;
+        const newTop = e.clientY - offsetY;
+
+        container.style.left = `${newLeft}px`;
+        container.style.top = `${newTop}px`;
+        container.style.right = 'auto';
+        container.style.bottom = 'auto';
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (isDragging) {
+            isDragging = false;
+            document.body.style.userSelect = '';
+            localStorage.setItem('ains_ui_left', container.style.left);
+            localStorage.setItem('ains_ui_top', container.style.top);
+            localStorage.removeItem('ains_ui_right');
+            localStorage.removeItem('ains_ui_bottom');
+        }
+    });
+
+    // Save resize dimensions
+    new ResizeObserver(() => {
+        if (container.style.width) localStorage.setItem('ains_ui_width', container.style.width);
+        if (container.style.height) localStorage.setItem('ains_ui_height', container.style.height);
+    }).observe(container);
+
+    container.appendChild(header);
+    container.appendChild(statsContainer);
     container.appendChild(label);
     container.appendChild(fileInput);
     container.appendChild(selectLabel);
@@ -473,6 +581,7 @@
             renderBookDropdown();
             checkAndResumeTimer();
             requestNotificationPermission();
+            updateStatsDisplay();
         }
     }
 
@@ -482,5 +591,8 @@
         initUI();
     }
 
-    setInterval(initUI, 1000);
+    setInterval(() => {
+        initUI();
+        updateStatsDisplay();
+    }, 1000);
 })();
